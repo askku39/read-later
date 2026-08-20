@@ -1,0 +1,2 @@
+SITE_URL=http://localhost:8787
+ADMIN_TOKEN=dev-local-token-change-me-32chars-min

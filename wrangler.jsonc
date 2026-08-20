@@ -1,0 +1,28 @@
+{
+  "name": "read-later",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+  // Plain-text vars only. Secrets (ADMIN_TOKEN) go through `wrangler secret put`
+  // and must never appear here.
+  // Deploy overwrites the dashboard's vars with this block, so anything set only
+  // in the dashboard is erased on the next deploy — keep every var listed here.
+  "vars": {
+    // Update when attaching a custom domain or deploying — the admin CSRF
+    // Origin check compares against this value. Wrong value here = every
+    // admin POST 403s with no other symptom.
+    "SITE_URL": "https://read-later.YOUR-SUBDOMAIN.workers.dev"
+  },
+  "assets": {
+    "directory": "./static",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "read-later-db",
+      // Replace with the ID printed by `wrangler d1 create read-later-db`.
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ]
+}
