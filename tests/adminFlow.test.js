@@ -54,7 +54,7 @@ async function login(env, ip) {
   const res = await worker.fetch(
     new Request(`${SITE}/admin/login`, {
       method: "POST",
-      headers: { "CF-Connecting-IP": ip, "content-type": "application/x-www-form-urlencoded" },
+      headers: { Origin: SITE, "CF-Connecting-IP": ip, "content-type": "application/x-www-form-urlencoded" },
       body: `token=${TOKEN}`,
     }),
     env
@@ -178,7 +178,7 @@ test("a successful login resets the failure counter", async () => {
     worker.fetch(
       new Request(`${SITE}/admin/login`, {
         method: "POST",
-        headers: { "CF-Connecting-IP": ip, "content-type": "application/x-www-form-urlencoded" },
+        headers: { Origin: SITE, "CF-Connecting-IP": ip, "content-type": "application/x-www-form-urlencoded" },
         body: `token=${token}`,
       }),
       env
@@ -198,4 +198,127 @@ test("login failure window expires", () => {
   for (let i = 0; i < 5; i += 1) recordLoginFailure(ip, start);
   assert.equal(loginBlocked(ip, start), true);
   assert.equal(loginBlocked(ip, start + 16 * 60 * 1000), false);
+});
+
+test("logout clears the cookie and admin responses are not stored", async () => {
+  const env = { DB: fakeDb(seedRows()), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie, csrf } = await login(env, "logout");
+  for (const path of ["/admin/", "/admin/login", "/admin/missing"]) {
+    const res = await worker.fetch(new Request(`${SITE}${path}`, { headers: { Cookie: cookie } }), env);
+    assert.equal(res.headers.get("Cache-Control"), "no-store");
+  }
+  const res = await worker.fetch(adminPost("/admin/logout", cookie, csrf, {}, env), env);
+  assert.equal(res.status, 303);
+  assert.match(res.headers.get("Set-Cookie"), /Max-Age=0/);
+  assert.equal(res.headers.get("Cache-Control"), "no-store");
+  const cleared = res.headers.get("Set-Cookie").split(";", 1)[0];
+  assert.equal((await worker.fetch(new Request(`${SITE}/admin/`, { headers: { Cookie: cleared } }), env)).status, 302);
+});
+
+test("tampered and correctly signed expired sessions are rejected", async () => {
+  const env = { DB: fakeDb(seedRows()), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie } = await login(env, "sessions");
+  const encoded = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 1, csrf: "c".repeat(43) }))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(TOKEN), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(encoded)));
+  const signed = btoa(String.fromCharCode(...signature)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  for (const value of [cookie.replace("admin_session=", "admin_session=x"), `admin_session=${encoded}.${signed}`]) {
+    const res = await worker.fetch(new Request(`${SITE}/admin/`, { headers: { Cookie: value } }), env);
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get("Location"), "/admin/login");
+  }
+});
+
+test("valid origin with wrong CSRF token is rejected without writing", async () => {
+  const rows = seedRows();
+  const env = { DB: fakeDb(rows), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie } = await login(env, "wrong-csrf");
+  const res = await worker.fetch(adminPost("/admin/api/links/create", cookie, "wrong", { title: "x" }, env), env);
+  assert.equal(res.status, 403);
+  assert.equal(rows.length, 1);
+});
+
+test("login rejects wrong or missing origins and accepts same-origin Referer", async () => {
+  const env = { DB: fakeDb([]), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  for (const headers of [{ Origin: "https://evil.test", Referer: SITE }, {}]) {
+    const res = await worker.fetch(new Request(`${SITE}/admin/login`, {
+      method: "POST", headers: { ...headers, "content-type": "application/x-www-form-urlencoded" }, body: `token=${TOKEN}`,
+    }), env);
+    assert.equal(res.status, 403);
+    assert.equal(res.headers.get("Set-Cookie"), null);
+    assert.equal(res.headers.get("Cache-Control"), "no-store");
+  }
+  const res = await worker.fetch(new Request(`${SITE}/admin/login`, {
+    method: "POST", headers: { Referer: `${SITE}/admin/login`, "content-type": "application/x-www-form-urlencoded" }, body: `token=${TOKEN}`,
+  }), env);
+  assert.equal(res.status, 303);
+  assert.equal(res.headers.get("Cache-Control"), "no-store");
+});
+
+test("malformed login and mutation form bodies return generic 400", async () => {
+  const env = { DB: fakeDb([]), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie } = await login(env, "malformed");
+  for (const path of ["/admin/login", "/admin/api/links/create"]) {
+    const res = await worker.fetch(new Request(`${SITE}${path}`, {
+      method: "POST", headers: { Origin: SITE, Cookie: cookie, "content-type": "multipart/form-data; boundary=test" }, body: "broken multipart body",
+    }), env);
+    assert.equal(res.status, 400);
+    assert.equal(await res.text(), "invalid form body");
+    assert.equal(res.headers.get("Cache-Control"), "no-store");
+  }
+});
+
+test("forms enforce 16 KB with and without Content-Length", async () => {
+  const env = { DB: fakeDb([]), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie } = await login(env, "oversized");
+  for (const path of ["/admin/login", "/admin/api/links/create"]) {
+    for (const lengthHeaders of [{}, { "Content-Length": "16385" }, { "Content-Length": "1" }]) {
+      const res = await worker.fetch(new Request(`${SITE}${path}`, {
+        method: "POST", headers: { ...lengthHeaders, Origin: SITE, Cookie: cookie, "content-type": "application/x-www-form-urlencoded" }, body: "x".repeat(16385),
+      }), env);
+      assert.equal(res.status, 413);
+      assert.equal(res.headers.get("Cache-Control"), "no-store");
+    }
+  }
+  const body = `token=${TOKEN}&padding=`;
+  const res = await worker.fetch(new Request(`${SITE}/admin/login`, {
+    method: "POST", headers: { Origin: SITE, "content-type": "application/x-www-form-urlencoded" },
+    body: body + "x".repeat(16384 - body.length),
+  }), env);
+  assert.equal(res.status, 303);
+});
+
+test("database read and write failures return generic 500", async () => {
+  const env = { DB: fakeDb([]), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie, csrf } = await login(env, "db-failure");
+  env.DB = { prepare() { throw new Error("internal database details"); } };
+  for (const request of [
+    new Request(SITE),
+    new Request(`${SITE}/admin/`, { headers: { Cookie: cookie } }),
+    adminPost("/admin/api/links/create", cookie, csrf, { url: "https://example.com", title: "valid" }, env),
+    adminPost("/admin/api/links/delete", cookie, csrf, { id: "1" }, env),
+  ]) {
+    const res = await worker.fetch(request, env);
+    assert.equal(res.status, 500);
+    assert.equal(await res.text(), "internal server error");
+    if (new URL(request.url).pathname.startsWith("/admin")) assert.equal(res.headers.get("Cache-Control"), "no-store");
+  }
+});
+
+test("link URL length and embedded credentials are validated before insertion", async () => {
+  const rows = [];
+  const env = { DB: fakeDb(rows), ADMIN_TOKEN: TOKEN, SITE_URL: SITE };
+  const { cookie, csrf } = await login(env, "url-validation");
+  const prefix = "https://example.com/";
+  const boundary = prefix + "a".repeat(2048 - prefix.length);
+  for (const url of [boundary + "a", "https://user:pass@example.com/", "https://user@example.com/", "https://:pass@example.com/"]) {
+    const res = await worker.fetch(adminPost("/admin/api/links/create", cookie, csrf, { url, title: "invalid" }, env), env);
+    assert.equal(res.status, 400);
+    assert.equal(rows.length, 0);
+  }
+  const res = await worker.fetch(adminPost("/admin/api/links/create", cookie, csrf, { url: boundary, title: "boundary" }, env), env);
+  assert.equal(res.status, 303);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].url, boundary);
 });

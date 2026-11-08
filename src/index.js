@@ -24,6 +24,7 @@ const CONTENT_SECURITY_POLICY = [
   "style-src 'self'",
   "script-src 'self'",
   "base-uri 'none'",
+  "frame-ancestors 'none'",
   "form-action 'self'",
 ].join("; ");
 
@@ -52,15 +53,25 @@ function methodNotAllowed(allow) {
 
 export default {
   async fetch(request, env) {
-    if (request.method === "HEAD") {
-      const response = withSecurityHeaders(await route(asGet(request), env));
-      return new Response(null, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
+    let response;
+    try {
+      response = await route(request.method === "HEAD" ? asGet(request) : request, env);
+    } catch (error) {
+      response = error instanceof Response
+        ? error
+        : new Response("internal server error", { status: 500 });
     }
-    return withSecurityHeaders(await route(request, env));
+    response = withSecurityHeaders(response);
+    const path = new URL(request.url).pathname;
+    const headers = new Headers(response.headers);
+    if (path === "/admin" || path.startsWith("/admin/")) {
+      headers.set("Cache-Control", "no-store");
+    }
+    return new Response(request.method === "HEAD" ? null : response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   },
 };
 

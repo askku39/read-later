@@ -8,6 +8,11 @@ export function validateLinkForm(form) {
   const errors = [];
 
   if (!url) errors.push("URL is required and must be https://");
+  if (rawUrl.length > 2048 || (url && url.length > 2048)) errors.push("URL must be 2048 characters or fewer");
+  if (url) {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) errors.push("URL must not contain embedded credentials");
+  }
   if (!title) errors.push("Title is required");
   if (title.length > 200) errors.push("Title must be 200 characters or fewer");
   if (tag.length > 50) errors.push("Tag must be 50 characters or fewer");
