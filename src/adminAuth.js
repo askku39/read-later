@@ -1,3 +1,6 @@
+import { getSiteUrl } from "./config.js";
+import { readForm } from "./forms.js";
+
 const COOKIE_NAME = "admin_session";
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 const encoder = new TextEncoder();
@@ -172,6 +175,8 @@ export async function handleAdminLogin(env, request) {
     return new Response(adminLoginPage(), { headers: { "content-type": "text/html; charset=UTF-8" } });
   }
 
+  if (!originMatchesSite(request, getSiteUrl(env))) return csrfForbiddenResponse();
+
   const ip = clientIp(request);
   // Throttle before reading the body: a blocked client should cost nothing.
   // This path deliberately does not record a failure, so hammering while
@@ -186,7 +191,7 @@ export async function handleAdminLogin(env, request) {
     });
   }
 
-  const form = await request.formData();
+  const form = await readForm(request);
   const token = form.get("token");
   if (typeof token !== "string" || !(await timingSafeEqual(token, env.ADMIN_TOKEN))) {
     recordLoginFailure(ip);
@@ -217,7 +222,7 @@ export function originMatchesSite(request, siteUrl) {
 
 export async function verifyAdminPost(request, session, siteUrl) {
   if (!originMatchesSite(request, siteUrl)) return false;
-  const form = await request.clone().formData();
+  const form = await readForm(request.clone());
   return form.get("csrf") === session.csrf;
 }
 

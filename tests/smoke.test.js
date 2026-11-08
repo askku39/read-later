@@ -27,11 +27,11 @@ test("admin authentication and CSRF gates fail closed", async () => {
   const missing = await worker.fetch(new Request("https://example.test/admin"), { DB });
   assert.equal(missing.status, 503);
 
-  const env = { DB, ADMIN_TOKEN: "x".repeat(32) };
+  const env = { DB, ADMIN_TOKEN: "x".repeat(32), SITE_URL: "https://example.test" };
   const get = await worker.fetch(new Request("https://example.test/admin"), env);
   assert.equal(get.status, 302);
   const post = await worker.fetch(
-    new Request("https://example.test/admin/api/items/create", { method: "POST" }),
+    new Request("https://example.test/admin/api/links/create", { method: "POST" }),
     env
   );
   assert.equal(post.status, 401);
@@ -39,7 +39,7 @@ test("admin authentication and CSRF gates fail closed", async () => {
   const session = await createAdminSession(env.ADMIN_TOKEN);
   const cookie = sessionCookie(session).split(";", 1)[0];
   const csrf = await worker.fetch(
-    new Request("https://example.test/admin/api/items/create", {
+    new Request("https://example.test/admin/api/links/create", {
       method: "POST",
       headers: { Cookie: cookie, Origin: "https://example.test", "content-type": "application/x-www-form-urlencoded" },
       body: "title=test",
@@ -68,6 +68,7 @@ test("security headers are present on HTML responses", async () => {
   const csp = res.headers.get("Content-Security-Policy");
   assert.match(csp, /default-src 'self'/);
   assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /frame-ancestors 'none'/);
 });
 
 test("no inline event handlers are rendered", async () => {

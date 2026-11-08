@@ -1,3 +1,4 @@
+import { readForm } from "../forms.js";
 import { SITE_NAME } from "../config.js";
 import { escapeHtml } from "../utils.js";
 import { listLinks, insertLink, deleteLink } from "../db.js";
@@ -42,7 +43,7 @@ export async function buildAdminPage(env, { csrfToken, errors = [], formValues =
     ${errorBlock}
     <form method="POST" action="/admin/api/links/create" class="form">
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
-      <label>URL<input type="text" name="url" required placeholder="https://..." value="${escapeHtml(formValues.rawUrl || "")}"></label>
+      <label>URL<input type="text" name="url" required maxlength="2048" placeholder="https://..." value="${escapeHtml(formValues.rawUrl || "")}"></label>
       <label>Title<input type="text" name="title" required maxlength="200" value="${escapeHtml(formValues.title || "")}"></label>
       <label>Tag<input type="text" name="tag" maxlength="50" value="${escapeHtml(formValues.tag || "")}"></label>
       <button type="submit" class="btn">Save</button>
@@ -66,7 +67,7 @@ export async function buildAdminPage(env, { csrfToken, errors = [], formValues =
 }
 
 export async function handleLinksCreate(env, request, session) {
-  const form = await request.formData();
+  const form = await readForm(request);
   const { valid, errors, data } = validateLinkForm(form);
 
   if (!valid) {
@@ -81,7 +82,7 @@ export async function handleLinksCreate(env, request, session) {
 }
 
 export async function handleLinksDelete(env, request) {
-  const form = await request.formData();
+  const form = await readForm(request);
   const id = form.get("id");
   if (id) await deleteLink(env, id);
   return new Response(null, { status: 303, headers: { Location: "/admin/" } });
